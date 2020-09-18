@@ -94,6 +94,9 @@ const styles = {
   }
 }
 
+let autoplayTimer;
+let internals;
+
 // missing `module.exports = exports['default'];` with babel6
 // export default React.createClass({
 export default class extends Component {
@@ -105,11 +108,7 @@ export default class extends Component {
     horizontal: PropTypes.bool,
     children: PropTypes.node.isRequired,
     containerStyle: PropTypes.oneOfType([PropTypes.object, PropTypes.number]),
-    style: PropTypes.oneOfType([
-      PropTypes.object,
-      PropTypes.number,
-      PropTypes.array
-    ]),
+    style: PropTypes.oneOfType([PropTypes.object, PropTypes.number]),
     scrollViewStyle: PropTypes.oneOfType([PropTypes.object, PropTypes.number]),
     pagingEnabled: PropTypes.bool,
     showsHorizontalScrollIndicator: PropTypes.bool,
@@ -196,13 +195,78 @@ export default class extends Component {
   autoplayTimer = null
   loopJumpTimer = null
 
-  UNSAFE_componentWillReceiveProps(nextProps) {
-    if (!nextProps.autoplay && this.autoplayTimer)
-      clearTimeout(this.autoplayTimer)
+  /* componentWillReceiveProps(nextProps) {
+    if (!nextProps.autoplay && autoplayTimer)
+      clearTimeout(autoplayTimer)
     if (nextProps.index === this.props.index) return
     this.setState(
       this.initState(nextProps, this.props.index !== nextProps.index)
     )
+  } */
+
+  static getDerivedStateFromProps(nextProps, prevState) {
+    if (!nextProps.autoplay && autoplayTimer)
+      clearTimeout(autoplayTimer)
+    if (prevState.index !== nextProps.index) {
+      /* this.setState(
+        this.initState(nextProps, prevState.index !== nextProps.index)
+      ) */
+
+      const state = prevState || { width: 0, height: 0, offset: { x: 0, y: 0 } }
+
+      const initState = {
+        autoplayEnd: false,
+        children: null,
+        loopJump: false,
+        offset: {}
+      }
+
+      // Support Optional render page
+      initState.children = nextProps.children.filter(child => child)
+
+      initState.total = initState.children ? initState.children.length || 1 : 0
+
+      if (state.total === initState.total && !prevState.index !== nextProps.index) {
+        // retain the index
+        initState.index = state.index
+      } else {
+        initState.index =
+          initState.total > 1 ? Math.min(nextProps.index, initState.total - 1) : 0
+      }
+
+      // Default: horizontal
+      const { width, height } = Dimensions.get('window')
+
+      initState.dir = nextProps.horizontal === false ? 'y' : 'x'
+
+      if (nextProps.width) {
+        initState.width = nextProps.width
+      } else if (prevState && prevState.width) {
+        initState.width = prevState.width
+      } else {
+        initState.width = width
+      }
+
+      if (nextProps.height) {
+        initState.height = nextProps.height
+      } else if (prevState && prevState.height) {
+        initState.height = prevState.height
+      } else {
+        initState.height = height
+      }
+
+      initState.offset[initState.dir] =
+        initState.dir === 'y' ? height * nextProps.index : width * nextProps.index
+
+      internals = {
+        ...internals,
+        isScrolling: false
+      }
+      return {
+        ...internals,
+      };
+    }
+    return null;
   }
 
   componentDidMount() {
@@ -210,15 +274,15 @@ export default class extends Component {
   }
 
   componentWillUnmount() {
-    this.autoplayTimer && clearTimeout(this.autoplayTimer)
+    autoplayTimer && clearTimeout(autoplayTimer)
     this.loopJumpTimer && clearTimeout(this.loopJumpTimer)
   }
 
-  UNSAFE_componentWillUpdate(nextProps, nextState) {
+  /* componentWillUpdate(nextProps, nextState) {
     // If the index has changed, we notify the parent via the onIndexChanged callback
     if (this.state.index !== nextState.index)
       this.props.onIndexChanged(nextState.index)
-  }
+  } */
 
   componentDidUpdate(prevProps) {
     // If autoplay props updated to true, autoplay immediately
@@ -226,13 +290,9 @@ export default class extends Component {
       this.autoplay()
     }
     if (this.props.children !== prevProps.children) {
-      if (this.props.loadMinimal && Platform.OS === 'ios') {
-        this.setState({ ...this.props, index: this.state.index })
-      } else {
-        this.setState(
-          this.initState({ ...this.props, index: this.state.index }, true)
-        )
-      }
+      this.setState(
+        this.initState({ ...this.props, index: this.state.index }, true)
+      )
     }
   }
 
@@ -248,9 +308,7 @@ export default class extends Component {
     }
 
     // Support Optional render page
-    initState.children = Array.isArray(props.children)
-      ? props.children.filter(child => child)
-      : props.children
+    initState.children = props.children.filter(child => child)
 
     initState.total = initState.children ? initState.children.length || 1 : 0
 
@@ -284,10 +342,10 @@ export default class extends Component {
     }
 
     initState.offset[initState.dir] =
-      initState.dir === 'y' ? initState.height * props.index : initState.width * props.index
+      initState.dir === 'y' ? height * props.index : width * props.index
 
-    this.internals = {
-      ...this.internals,
+    internals = {
+      ...internals,
       isScrolling: false
     }
     return initState
@@ -295,12 +353,12 @@ export default class extends Component {
 
   // include internals with state
   fullState() {
-    return Object.assign({}, this.state, this.internals)
+    return Object.assign({}, this.state, internals)
   }
 
   onLayout = event => {
     const { width, height } = event.nativeEvent.layout
-    const offset = (this.internals.offset = {})
+    const offset = (internals.offset = {})
     const state = { width, height }
 
     if (this.state.total > 1) {
@@ -314,18 +372,19 @@ export default class extends Component {
 
     // only update the offset in state if needed, updating offset while swiping
     // causes some bad jumping / stuttering
-    if (!this.state.offset) {
+    if (
+      !this.state.offset ||
+      width !== this.state.width ||
+      height !== this.state.height
+    ) {
       state.offset = offset
     }
 
     // related to https://github.com/leecade/react-native-swiper/issues/570
     // contentOffset is not working in react 0.48.x so we need to use scrollTo
     // to emulate offset.
-    if(this.state.total > 1) {
+    if (this.initialRender && this.state.total > 1) {
       this.scrollView.scrollTo({ ...offset, animated: false })
-    }
-	
-    if (this.initialRender) {
       this.initialRender = false
     }
 
@@ -337,34 +396,10 @@ export default class extends Component {
     const i = this.state.index + (this.props.loop ? 1 : 0)
     const scrollView = this.scrollView
     this.loopJumpTimer = setTimeout(
-      () => {
-        if (scrollView.setPageWithoutAnimation) {
-          scrollView.setPageWithoutAnimation(i)
-        } else {
-          if (this.state.index === 0) {
-            scrollView.scrollTo(
-              this.props.horizontal === false
-                ? { x: 0, y: this.state.height, animated: false }
-                : { x: this.state.width, y: 0, animated: false }
-            )
-          } else if (this.state.index === this.state.total - 1) {
-            this.props.horizontal === false
-              ? this.scrollView.scrollTo({
-                  x: 0,
-                  y: this.state.height * this.state.total,
-                  animated: false
-                })
-              : this.scrollView.scrollTo({
-                  x: this.state.width * this.state.total,
-                  y: 0,
-                  animated: false
-                })
-          }
-        }
-      },
-      // Important Parameter
-      // ViewPager 50ms, ScrollView 300ms
-      scrollView.setPageWithoutAnimation ? 50 : 300
+      () =>
+        scrollView.setPageWithoutAnimation &&
+        scrollView.setPageWithoutAnimation(i),
+      50
     )
   }
 
@@ -375,13 +410,13 @@ export default class extends Component {
     if (
       !Array.isArray(this.state.children) ||
       !this.props.autoplay ||
-      this.internals.isScrolling ||
+      internals.isScrolling ||
       this.state.autoplayEnd
     )
       return
 
-    this.autoplayTimer && clearTimeout(this.autoplayTimer)
-    this.autoplayTimer = setTimeout(() => {
+    autoplayTimer && clearTimeout(autoplayTimer)
+    autoplayTimer = setTimeout(() => {
       if (
         !this.props.loop &&
         (this.props.autoplayDirection
@@ -400,7 +435,7 @@ export default class extends Component {
    */
   onScrollBegin = e => {
     // update scroll state
-    this.internals.isScrolling = true
+    internals.isScrolling = true
     this.props.onScrollBeginDrag &&
       this.props.onScrollBeginDrag(e, this.fullState(), this)
   }
@@ -411,7 +446,7 @@ export default class extends Component {
    */
   onScrollEnd = e => {
     // update scroll state
-    this.internals.isScrolling = false
+    internals.isScrolling = false
 
     // making our events coming from android compatible to updateIndex logic
     if (!e.nativeEvent.contentOffset) {
@@ -429,10 +464,11 @@ export default class extends Component {
     this.updateIndex(e.nativeEvent.contentOffset, this.state.dir, () => {
       this.autoplay()
       this.loopJump()
+
+      // if `onMomentumScrollEnd` registered will be called here
+      this.props.onMomentumScrollEnd &&
+        this.props.onMomentumScrollEnd(e, this.fullState(), this)
     })
-    // if `onMomentumScrollEnd` registered will be called here
-    this.props.onMomentumScrollEnd &&
-      this.props.onMomentumScrollEnd(e, this.fullState(), this)
   }
 
   /*
@@ -443,7 +479,7 @@ export default class extends Component {
     const { contentOffset } = e.nativeEvent
     const { horizontal } = this.props
     const { children, index } = this.state
-    const { offset } = this.internals
+    const { offset } = internals
     const previousOffset = horizontal ? offset.x : offset.y
     const newOffset = horizontal ? contentOffset.x : contentOffset.y
 
@@ -451,7 +487,7 @@ export default class extends Component {
       previousOffset === newOffset &&
       (index === 0 || index === children.length - 1)
     ) {
-      this.internals.isScrolling = false
+      internals.isScrolling = false
     }
   }
 
@@ -461,13 +497,25 @@ export default class extends Component {
    * @param  {string} dir    'x' || 'y'
    */
   updateIndex = (offset, dir, cb) => {
-    const state = this.state
     // Android ScrollView will not scrollTo certain offset when props change
+    const callback = () => {
+      cb()
+      if (Platform.OS === 'android') {
+        this.state.index === 0 &&
+          this.scrollView.scrollTo({ x: state.width, y: 0, animated: false })
+        this.state.index === this.state.total - 1 &&
+          this.scrollView.scrollTo({
+            x: state.width * this.state.total,
+            animated: false
+          })
+      }
+    }
+    const state = this.state
     let index = state.index
-    if (!this.internals.offset)
+    if (!internals.offset)
       // Android not setting this onLayout first? https://github.com/leecade/react-native-swiper/issues/582
-      this.internals.offset = {}
-    const diff = offset[dir] - (this.internals.offset[dir] || 0)
+      internals.offset = {}
+    const diff = offset[dir] - internals.offset[dir]
     const step = dir === 'x' ? state.width : state.height
     let loopJump = false
 
@@ -495,7 +543,7 @@ export default class extends Component {
     newState.index = index
     newState.loopJump = loopJump
 
-    this.internals.offset = offset
+    internals.offset = offset
 
     // only update offset in state if loopJump is true
     if (loopJump) {
@@ -504,18 +552,18 @@ export default class extends Component {
       // Setting the offset to the same thing will not do anything,
       // so we increment it by 1 then immediately set it to what it should be,
       // after render.
-      if (offset[dir] === this.internals.offset[dir]) {
+      if (offset[dir] === internals.offset[dir]) {
         newState.offset = { x: 0, y: 0 }
         newState.offset[dir] = offset[dir] + 1
         this.setState(newState, () => {
-          this.setState({ offset: offset }, cb)
+          this.setState({ offset: offset }, callback)
         })
       } else {
         newState.offset = offset
-        this.setState(newState, cb)
+        this.setState(newState, callback)
       }
     } else {
-      this.setState(newState, cb)
+      this.setState(newState, callback)
     }
   }
 
@@ -526,7 +574,7 @@ export default class extends Component {
    */
 
   scrollBy = (index, animated = true) => {
-    if (this.internals.isScrolling || this.state.total < 2) return
+    if (internals.isScrolling || this.state.total < 2) return
     const state = this.state
     const diff = (this.props.loop ? 1 : 0) + index + this.state.index
     let x = 0
@@ -537,7 +585,7 @@ export default class extends Component {
     this.scrollView && this.scrollView.scrollTo({ x, y, animated })
 
     // update scroll state
-    this.internals.isScrolling = true
+    internals.isScrolling = true
     this.setState({
       autoplayEnd: false
     })
@@ -562,7 +610,7 @@ export default class extends Component {
 
   scrollTo = (index, animated = true) => {
     if (
-      this.internals.isScrolling ||
+      internals.isScrolling ||
       this.state.total < 2 ||
       index == this.state.index
     )
@@ -579,7 +627,7 @@ export default class extends Component {
     this.scrollView && this.scrollView.scrollTo({ x, y, animated })
 
     // update scroll state
-    this.internals.isScrolling = true
+    internals.isScrolling = true
     this.setState({
       autoplayEnd: false
     })
@@ -828,12 +876,8 @@ export default class extends Component {
       pages = pages.map((page, i) => {
         if (loadMinimal) {
           if (
-            (i >= index + loopVal - loadMinimalSize &&
-              i <= index + loopVal + loadMinimalSize) ||
-            // The real first swiper should be keep
-            (loop && i === 1) ||
-            // The real last swiper should be keep
-            (loop && i === total - 1)
+            i >= index + loopVal - loadMinimalSize &&
+            i <= index + loopVal + loadMinimalSize
           ) {
             return (
               <View style={pageStyle} key={i}>
